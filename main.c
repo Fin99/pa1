@@ -5,8 +5,11 @@
 #include <sys/wait.h>
 #include "ipc.h"
 #include "pa1.h"
+#include "common.h"
 
 void free_memory();
+
+void open_log();
 
 void wait_child_process();
 
@@ -30,11 +33,15 @@ void wait_message();
 
 void send_done();
 
+void close_log();
+
 long *processes_ids;
 long child_process;
 int **write_channels;
 int **read_channels;
 int id;
+
+FILE *log_file;
 
 int main(int argc, char const *argv[]) {
 
@@ -42,6 +49,7 @@ int main(int argc, char const *argv[]) {
     read_args(argc, argv);
     alloc_channels();
     alloc_processes_ids();
+    open_log();
     open_channel();
     create_process();
 
@@ -50,18 +58,25 @@ int main(int argc, char const *argv[]) {
     }
     wait_message();
     printf(log_received_all_started_fmt, id);
+    fprintf(log_file, log_received_all_started_fmt, id);
 
     if (id != PARENT_ID) {
         send_done();
     }
     wait_message();
     printf(log_received_all_done_fmt, id);
+    fprintf(log_file, log_received_all_done_fmt, id);
 
     // end program
+    close_log();
     close_channels();
     free_memory_and_wait_child_process();
 
     return 0;
+}
+
+void close_log() {
+    fclose(log_file);
 }
 
 void send_done() {
@@ -73,6 +88,7 @@ void send_done() {
     header.s_payload_len = strlen(message.s_payload);
     message.s_header = header;
     send_multicast(NULL, &message);
+    fprintf(log_file, log_done_fmt, id);
     printf(log_done_fmt, id);
 }
 
@@ -94,6 +110,7 @@ void send_started() {
     header.s_payload_len = strlen(message.s_payload);
     message.s_header = header;
     send_multicast(NULL, &message);
+    fprintf(log_file, log_started_fmt, id, getpid(), getppid());
     printf(log_started_fmt, id, getpid(), getppid());
 }
 
@@ -190,4 +207,9 @@ void free_memory() {
     free(processes_ids);
     free(read_channels);
     free(write_channels);
+}
+
+
+void open_log() {
+    log_file = fopen(events_log, "w");
 }
