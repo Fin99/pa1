@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include "ipc.h"
+#include "pa1.h"
 
 void free_memory();
 
@@ -21,43 +22,96 @@ void create_process();
 
 void open_channel();
 
+void alloc_processes_ids();
+
+void send_started();
+
+void wait_message();
+
+void send_done();
+
 long *processes_ids;
 long child_process;
 int **write_channels;
 int **read_channels;
-long id;
+int id;
 
 int main(int argc, char const *argv[]) {
 
+    //start program
     read_args(argc, argv);
-
     alloc_channels();
-
-    processes_ids = malloc(sizeof(long) * (child_process + 1));
-    processes_ids[PARENT_ID] = getpid();
-    id = PARENT_ID;
-
+    alloc_processes_ids();
+    open_channel();
     create_process();
 
-    open_channel();
+    if (id != PARENT_ID) {
+        send_started();
+    }
+    wait_message();
+    printf(log_received_all_started_fmt, id);
 
-    if (id != processes_ids[PARENT_ID])
-        printf("Process created pid=%d, ppid=%d\n", getpid(), getppid());
+    if (id != PARENT_ID) {
+        send_done();
+    }
+    wait_message();
+    printf(log_received_all_done_fmt, id);
 
+    // end program
     close_channels();
-
     free_memory_and_wait_child_process();
 
     return 0;
 }
 
+void send_done() {
+    MessageHeader header;
+    header.s_magic = MESSAGE_MAGIC;
+    header.s_type = DONE;
+    Message message;
+    sprintf(message.s_payload, log_done_fmt, id);
+    header.s_payload_len = strlen(message.s_payload);
+    message.s_header = header;
+    send_multicast(NULL, &message);
+    printf(log_done_fmt, id);
+}
+
+void wait_message() {
+    Message message;
+    for (int i = 1; i <= child_process; i++) {
+        if (i != id) {
+            receive(NULL, i, &message);
+        }
+    }
+}
+
+void send_started() {
+    MessageHeader header;
+    header.s_magic = MESSAGE_MAGIC;
+    header.s_type = STARTED;
+    Message message;
+    sprintf(message.s_payload, log_started_fmt, id, getpid(), getppid());
+    header.s_payload_len = strlen(message.s_payload);
+    message.s_header = header;
+    send_multicast(NULL, &message);
+    printf(log_started_fmt, id, getpid(), getppid());
+}
+
+void alloc_processes_ids() {
+    processes_ids = malloc(sizeof(long) * (child_process + 1));
+    processes_ids[PARENT_ID] = getpid();
+    id = PARENT_ID;
+}
+
 void open_channel() {
     for (int i = 0; i < child_process + 1; i++) {
-        if (i != id) {
-            int pipe_reader_writer[2];
-            pipe(pipe_reader_writer);
-            read_channels[id][i] = pipe_reader_writer[0];
-            write_channels[id][i] = pipe_reader_writer[1];
+        for (int j = 0; j < child_process + 1; j++) {
+            if (i != id) {
+                int pipe_reader_writer[2];
+                pipe(pipe_reader_writer);
+                read_channels[i][j] = pipe_reader_writer[0];
+                write_channels[i][j] = pipe_reader_writer[1];
+            }
         }
     }
 }
@@ -99,10 +153,14 @@ void read_args(int argc, char const *argv[]) {
 }
 
 void close_channels() {
-    for (int i = 0; i < child_process + 1; i++) {
-        if (i != id) {
-            close(read_channels[id][i]);
-            close(write_channels[id][i]);
+    if (id == PARENT_ID) {
+        for (int i = 0; i < child_process + 1; i++) {
+            for (int j = 0; j < child_process + 1; ++j) {
+                if (i != id) {
+                    close(read_channels[i][j]);
+                    close(write_channels[i][j]);
+                }
+            }
         }
     }
 }
