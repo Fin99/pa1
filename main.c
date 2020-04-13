@@ -15,8 +15,6 @@ void wait_child_process();
 
 void free_memory_and_wait_child_process();
 
-void close_channels();
-
 void read_args(int argc, char const *argv[]);
 
 void alloc_channels();
@@ -35,6 +33,8 @@ void send_done();
 
 void close_log();
 
+void close_other_channels();
+
 long *processes_ids;
 long child_process;
 int **write_channels;
@@ -52,6 +52,7 @@ int main(int argc, char const *argv[]) {
     open_log();
     open_channel();
     create_process();
+    close_other_channels();
 
     if (id != PARENT_ID) {
         send_started();
@@ -69,10 +70,26 @@ int main(int argc, char const *argv[]) {
 
     // end program
     close_log();
-    close_channels();
     free_memory_and_wait_child_process();
 
     return 0;
+}
+
+void close_other_channels() {
+    for (int source = 0; source < child_process + 1; source++) {
+        for (int destination = 0; destination < child_process + 1; destination++) {
+            if (source != id && destination != id && source != destination) {
+                close(write_channels[source][destination]);
+                close(read_channels[source][destination]);
+            }
+            if (destination == id && source != id) {
+                close(write_channels[source][destination]);
+            }
+            if (source == id && destination != id) {
+                close(read_channels[source][destination]);
+            }
+        }
+    }
 }
 
 void close_log() {
@@ -166,19 +183,6 @@ void read_args(int argc, char const *argv[]) {
     } else {
         fprintf(stderr, "Number child process shouldn't be null\n");
         exit(1);
-    }
-}
-
-void close_channels() {
-    if (id == PARENT_ID) {
-        for (int i = 0; i < child_process + 1; i++) {
-            for (int j = 0; j < child_process + 1; ++j) {
-                if (i != id) {
-                    close(read_channels[i][j]);
-                    close(write_channels[i][j]);
-                }
-            }
-        }
     }
 }
 
