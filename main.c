@@ -140,7 +140,7 @@ void alloc_processes_ids() {
 void open_channel() {
     for (int i = 0; i < child_process + 1; i++) {
         for (int j = 0; j < child_process + 1; j++) {
-            if (i != id) {
+            if (i != j) {
                 int pipe_reader_writer[2];
                 pipe(pipe_reader_writer);
                 read_channels[i][j] = pipe_reader_writer[0];
@@ -167,7 +167,7 @@ void create_process() {
 void alloc_channels() {
     write_channels = malloc(sizeof(long) * (child_process + 1));
     read_channels = malloc(sizeof(long) * (child_process + 1));
-    for (int i = 0; i <= child_process; ++i) {
+    for (int i = 0; i < child_process + 1; i++) {
         write_channels[i] = malloc(sizeof(long) * (child_process + 1));
         read_channels[i] = malloc(sizeof(long) * (child_process + 1));
     }
