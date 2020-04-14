@@ -2,10 +2,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include "ipc.h"
-#include "pa1.h"
+#include "pa2345.h"
 #include "common.h"
+#include "banking.h"
 
 void free_memory();
 
@@ -25,21 +27,29 @@ void open_channel();
 
 void alloc_processes_ids();
 
-void send_started();
+void wait_all_message();
 
-void wait_message();
-
-void send_done();
+Message wait_message_from(int process_id);
 
 void close_log();
 
 void close_other_channels();
+
+Message get_started();
+
+Message get_stop();
+
+Message get_done();
+
+void send_all(Message message);
 
 long *processes_ids;
 long child_process;
 int **write_channels;
 int **read_channels;
 int id;
+
+int *balance;
 
 FILE *log_file;
 
@@ -55,24 +65,97 @@ int main(int argc, char const *argv[]) {
     close_other_channels();
 
     if (id != PARENT_ID) {
-        send_started();
+        send_all(get_started());
+        fprintf(log_file, log_started_fmt, get_physical_time(), id, getpid(), getppid(), balance[id - 1]);
+        printf(log_started_fmt, get_physical_time(), id, getpid(), getppid(), balance[id - 1]);
     }
-    wait_message();
-    printf(log_received_all_started_fmt, id);
-    fprintf(log_file, log_received_all_started_fmt, id);
-
+    wait_all_message();
+    printf(log_received_all_started_fmt, get_physical_time(), id);
+    fprintf(log_file, log_received_all_started_fmt, get_physical_time(), id);
+    //////////////// work
+    if (id == PARENT_ID) {
+        bank_robbery(NULL, child_process);
+        printf("send stop\n");
+        send_all(get_stop());
+    }
     if (id != PARENT_ID) {
-        send_done();
+        int flag_stop = 1;
+        while (flag_stop) {
+            Message message = wait_message_from(PARENT_ID);
+            if (message.s_header.s_type == STOP) {
+                printf("STOP\n");
+                flag_stop = 0;
+            } else if (message.s_header.s_type == TRANSFER) {
+                printf("TRANSFER\n");
+            }
+        }
     }
-    wait_message();
-    printf(log_received_all_done_fmt, id);
-    fprintf(log_file, log_received_all_done_fmt, id);
+    ////////////////
+    if (id != PARENT_ID) {
+        send_all(get_done());
+        fprintf(log_file, log_done_fmt, get_physical_time(), id, balance[id - 1]);
+        printf(log_done_fmt, get_physical_time(), id, balance[id - 1]);
+    }
+    wait_all_message();
+    printf(log_received_all_done_fmt, get_physical_time(), id);
+    fprintf(log_file, log_received_all_done_fmt, get_physical_time(), id);
 
     // end program
     close_log();
     free_memory_and_wait_child_process();
 
     return 0;
+}
+
+void send_to(Message message, int destination) {
+    send(NULL, destination, &message);
+}
+
+void send_all(Message message) {
+    send_multicast(NULL, &message);
+}
+
+Message get_transfer(int source, int destination, int sum) {
+    MessageHeader header;
+    header.s_magic = MESSAGE_MAGIC;
+    header.s_type = TRANSFER;
+    Message message;
+
+    TransferOrder order;
+    order.s_src = source;
+    order.s_dst = destination;
+    order.s_amount = sum;
+
+    message.s_payload = order;
+
+    header.s_payload_len = 0;
+    message.s_header = header;
+    return message;
+}
+
+Message get_stop() {
+    MessageHeader header;
+    header.s_magic = MESSAGE_MAGIC;
+    header.s_type = STOP;
+    Message message;
+    header.s_payload_len = 0;
+    message.s_header = header;
+    return message;
+}
+
+Message get_done() {
+    MessageHeader header;
+    header.s_magic = MESSAGE_MAGIC;
+    header.s_type = DONE;
+    Message message;
+    sprintf(message.s_payload, log_done_fmt, get_physical_time(), id, balance[id - 1]);
+    header.s_payload_len = strlen(message.s_payload);
+    message.s_header = header;
+    return message;
+}
+
+void transfer(void *parent_data, local_id src, local_id dst, balance_t amount) {
+TRANSFER
 }
 
 void close_other_channels() {
@@ -96,39 +179,22 @@ void close_log() {
     fclose(log_file);
 }
 
-void send_done() {
-    MessageHeader header;
-    header.s_magic = MESSAGE_MAGIC;
-    header.s_type = DONE;
+Message wait_message_from(int process_id) {
     Message message;
-    sprintf(message.s_payload, log_done_fmt, id);
-    header.s_payload_len = strlen(message.s_payload);
-    message.s_header = header;
-    send_multicast(NULL, &message);
-    fprintf(log_file, log_done_fmt, id);
-    printf(log_done_fmt, id);
+    receive(NULL, process_id, &message);
+    return message;
 }
 
-void wait_message() {
+void wait_all_message() {
     Message message;
     for (int i = 1; i <= child_process; i++) {
         if (i != id) {
-            receive(NULL, i, &message);
+            int receive_result = 1;
+            while (receive_result) {
+                receive_result = receive(NULL, i, &message);
+            }
         }
     }
-}
-
-void send_started() {
-    MessageHeader header;
-    header.s_magic = MESSAGE_MAGIC;
-    header.s_type = STARTED;
-    Message message;
-    sprintf(message.s_payload, log_started_fmt, id, getpid(), getppid());
-    header.s_payload_len = strlen(message.s_payload);
-    message.s_header = header;
-    send_multicast(NULL, &message);
-    fprintf(log_file, log_started_fmt, id, getpid(), getppid());
-    printf(log_started_fmt, id, getpid(), getppid());
 }
 
 void alloc_processes_ids() {
@@ -144,6 +210,7 @@ void open_channel() {
                 int pipe_reader_writer[2];
                 pipe(pipe_reader_writer);
                 read_channels[i][j] = pipe_reader_writer[0];
+                fcntl(read_channels[i][j], F_SETFL, O_NONBLOCK);
                 write_channels[i][j] = pipe_reader_writer[1];
             }
         }
@@ -174,10 +241,23 @@ void alloc_channels() {
 }
 
 void read_args(int argc, char const *argv[]) {
-    if (argc == 3 && strcmp(argv[1], "-p") == 0) {
+    if (argc >= 3 && strcmp(argv[1], "-p") == 0) {
         child_process = strtol(argv[2], NULL, 10);
         if (child_process < 1 || child_process > 10) {
             fprintf(stderr, "Number child process must be in range 1..10\n");
+            exit(1);
+        }
+        if (argc == child_process + 3) {
+            balance = malloc(sizeof(int) * child_process);
+            for (int i = 0; i < child_process; ++i) {
+                balance[i] = strtol(argv[i + 3], NULL, 10);
+                if (balance[i] < 1 || balance[i] > 99) {
+                    fprintf(stderr, "Child process balance must be in range 1..99\n");
+                    exit(1);
+                }
+            }
+        } else {
+            fprintf(stderr, "Set child process balance\n");
             exit(1);
         }
     } else {
@@ -216,4 +296,15 @@ void free_memory() {
 
 void open_log() {
     log_file = fopen(events_log, "w");
+}
+
+Message get_started() {
+    MessageHeader header;
+    header.s_magic = MESSAGE_MAGIC;
+    header.s_type = STARTED;
+    Message message;
+    sprintf(message.s_payload, log_started_fmt, get_physical_time(), id, getpid(), getppid(), balance[id - 1]);
+    header.s_payload_len = strlen(message.s_payload);
+    message.s_header = header;
+    return message;
 }
